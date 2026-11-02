@@ -37,6 +37,9 @@ import {
 } from 'react-icons/fi';
 import { TbSparkles, TbRobot } from 'react-icons/tb';
 
+// Refresh interval used only while a scan/pipeline is running
+const SCAN_FALLBACK_REFRESH_MS = 30000;
+
 export default function Dashboard() {
   const { user, loading: authLoading, logout } = useAuth();
   const [activeTab, setActiveTab] = useState<'dashboard' | 'jobs' | 'profile' | 'applications'>('dashboard');
@@ -150,11 +153,25 @@ export default function Dashboard() {
     }
   };
 
-  // Initial load, polling, and SSE notification subscription
+  // Keep the latest versions of these callbacks reachable from long-lived
+  // effects/handlers (EventSource, intervals) without stale closures and
+  // without re-subscribing on every render.
+  const refreshAllDataRef = useRef(refreshAllData);
+  refreshAllDataRef.current = refreshAllData;
+  const fetchConfigRef = useRef(fetchConfig);
+  fetchConfigRef.current = fetchConfig;
+  const addToastRef = useRef(addToast);
+  addToastRef.current = addToast;
+
+  const userId = user?.uid;
+
+  // Signed-in only: initial load and SSE notification subscription.
+  // Nothing runs on the landing page / sign-in / sign-up screens.
   useEffect(() => {
-    fetchConfig();
-    refreshAllData();
-    const interval = setInterval(refreshAllData, 10000);
+    if (authLoading || !userId) return;
+
+    fetchConfigRef.current();
+    refreshAllDataRef.current();
 
     // Request browser notification permission
     if (typeof Notification !== 'undefined' && Notification.permission === 'default') {
@@ -163,17 +180,24 @@ export default function Dashboard() {
 
     // Subscribe to real-time application notifications via SSE
     const es = new EventSource('/api/notifications');
+    let hasOpened = false;
+    es.onopen = () => {
+      // Resync on reconnect to cover any events missed while disconnected
+      // (the initial open is already covered by the load above).
+      if (hasOpened) refreshAllDataRef.current();
+      hasOpened = true;
+    };
     es.onmessage = (event) => {
       try {
         const notif = JSON.parse(event.data);
         if (notif.type === 'CONNECTED') return; // Ignore connect ack
-        addToast(notif.title, notif.body, notif.type);
+        addToastRef.current(notif.title, notif.body, notif.type);
         // Also fire a native browser push notification if permitted
         if (typeof Notification !== 'undefined' && Notification.permission === 'granted') {
           new Notification(notif.title, { body: notif.body, icon: '/favicon.ico' });
         }
         // Refresh data when an application event fires
-        if (notif.type !== 'INFO') refreshAllData();
+        if (notif.type !== 'INFO') refreshAllDataRef.current();
       } catch (e) {
         console.error('Failed to parse SSE notification:', e);
       }
@@ -181,10 +205,19 @@ export default function Dashboard() {
     es.onerror = () => console.warn('[SSE] Notification stream disconnected, will reconnect automatically.');
 
     return () => {
-      clearInterval(interval);
       es.close();
     };
-  }, []);
+  }, [userId, authLoading]);
+
+  // Fallback refresh, only while a scan/pipeline is running. Covers pipelines
+  // started in a separate process (yarn harvest / yarn scheduler) whose events
+  // never reach this server's SSE stream. isPipelineRunning comes from
+  // /api/pipeline/status, so this stops on the first tick after the scan ends.
+  useEffect(() => {
+    if (authLoading || !userId || !isPipelineRunning) return;
+    const interval = setInterval(() => refreshAllDataRef.current(), SCAN_FALLBACK_REFRESH_MS);
+    return () => clearInterval(interval);
+  }, [userId, authLoading, isPipelineRunning]);
 
   // Pagination state
   const [topMatchesPage, setTopMatchesPage] = useState(1);
