@@ -563,10 +563,9 @@
         <div>
           <div class="card-panel" style="margin-bottom: 1.5rem;">
             <h3>CV Resume Ingestion</h3>
-            <p style="font-size: 0.8125rem; color: var(--text-secondary); margin-bottom: 1.25rem;">
-              Parse a local CV file. AI will structure skills and work history automatically.
+            <p style="font-size: 0.8125rem; color: var(--text-secondary); margin-bottom: 0;">
+              Upload a PDF or DOCX resume from the dashboard. The file is sent to /api/profile/upload. This server does not read a path on disk.
             </p>
-            <button class="btn btn-secondary" style="width: 100%;" onclick="openParseModal()">Upload PDF Resume</button>
           </div>
           <div class="card-panel">
             <h3>Active Profile Metadata</h3>
@@ -652,21 +651,6 @@
       </div>
     </div>
   </main>
-
-  <!-- Parse Resume Modal -->
-  <div id="parse-modal" class="modal">
-    <div class="modal-content">
-      <div class="modal-header">Parse PDF Resume</div>
-      <div class="form-group">
-        <label for="resume-local-path">Absolute path to local resume PDF</label>
-        <input type="text" id="resume-local-path" class="form-control" placeholder="/Users/username/resume.pdf">
-      </div>
-      <div class="modal-footer">
-        <button class="btn btn-secondary" onclick="closeParseModal()">Cancel</button>
-        <button class="btn" onclick="parseResume()">Parse CV with AI</button>
-      </div>
-    </div>
-  </div>
 
   <script src="/app.js"></script>
 </body>

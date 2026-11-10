@@ -1,10 +1,11 @@
-import { exec } from 'child_process';
+import { execFile } from 'child_process';
 import * as path from 'path';
-import { JobPosting } from '../../config/firebase';
+import type { JobPosting } from '../../config/firebase';
 import { NotificationService } from '../../services/notification-service';
 
 // Maximum time (ms) to wait for all job board scrapes to complete
 const SCRAPE_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes
+const SCRAPE_MAX_BUFFER_BYTES = 20 * 1024 * 1024;
 
 interface ScrapedJob {
   id: string;
@@ -18,67 +19,112 @@ interface ScrapedJob {
   date_posted?: string;
 }
 
+export interface JobspyRunOptions {
+  /** Interpreter used to start the wrapper. Defaults to python3. */
+  pythonBin?: string;
+  /** Wrapper script. Defaults to jobspy_wrapper.py in the working directory. */
+  scriptPath?: string;
+  /** Extra environment for the child. Merged over process.env. */
+  env?: NodeJS.ProcessEnv;
+}
+
+export function countryForLocation(primaryLoc: string): string {
+  let countryArg = 'worldwide';
+  const locLower = (primaryLoc || '').toLowerCase();
+  if (locLower.includes('uk') || locLower.includes('united kingdom') || locLower.includes('london')) countryArg = 'uk';
+  else if (locLower.includes('germany') || locLower.includes('berlin') || locLower.includes('munich')) countryArg = 'germany';
+  else if (locLower.includes('netherlands') || locLower.includes('amsterdam')) countryArg = 'netherlands';
+  else if (locLower.includes('canada') || locLower.includes('toronto')) countryArg = 'canada';
+  else if (locLower.includes('nigeria') || locLower.includes('lagos')) countryArg = 'nigeria';
+  else if (locLower.includes('south africa') || locLower.includes('cape town')) countryArg = 'south africa';
+  else if (locLower.includes('singapore')) countryArg = 'singapore';
+  else if (locLower.includes('india') || locLower.includes('bengaluru')) countryArg = 'india';
+  else if (locLower.includes('united states') || locLower.includes('usa')) countryArg = 'usa';
+  return countryArg;
+}
+
+/**
+ * Argv for jobspy_wrapper.py. Role and location are always their own elements
+ * and are never concatenated into a shell command.
+ */
+export function buildJobspyArgs(
+  searchTerms: string | string[],
+  locations: string | string[],
+  limitPerSite: number = 10,
+  hoursOld: number = 336,
+): { args: string[]; country: string; primaryLoc: string } {
+  const terms = Array.isArray(searchTerms) ? searchTerms : [searchTerms];
+  const locs = Array.isArray(locations) ? locations : [locations];
+
+  const primaryTerm = terms[0] || 'Software Engineer';
+  const primaryLoc = locs[0] || '';
+  const extraTerms = terms.slice(1);
+  const extraLocs = locs.slice(1);
+  const country = countryForLocation(primaryLoc);
+
+  const args: string[] = ['--search', primaryTerm];
+  if (primaryLoc) {
+    args.push('--location', primaryLoc);
+  }
+  if (extraTerms.length > 0) {
+    args.push('--searches', JSON.stringify(extraTerms));
+  }
+  if (extraLocs.length > 0) {
+    args.push('--locations', JSON.stringify(extraLocs));
+  }
+  args.push(
+    '--sites',
+    'indeed,linkedin,zip_recruiter,glassdoor,google',
+    '--limit',
+    String(limitPerSite),
+    '--hours',
+    String(hoursOld || 336),
+    '--country',
+    country,
+  );
+
+  return { args, country, primaryLoc };
+}
+
 export class JobspyRunner {
   /**
    * Scrapes multiple job boards concurrently using python-jobspy.
    * Accepts multiple search terms and locations for broader coverage.
    * All scraping happens in the Python wrapper via ThreadPoolExecutor.
+   * The child is started with execFile (no shell).
    */
   static async scrape(
     searchTerms: string | string[],
     locations: string | string[],
     limitPerSite: number = 10,
-    hoursOld: number = 336 // 2 weeks
+    hoursOld: number = 336, // 2 weeks
+    options?: JobspyRunOptions,
   ): Promise<JobPosting[]> {
+    const { args, country: countryArg, primaryLoc } = buildJobspyArgs(
+      searchTerms,
+      locations,
+      limitPerSite,
+      hoursOld,
+    );
     const terms = Array.isArray(searchTerms) ? searchTerms : [searchTerms];
     const locs = Array.isArray(locations) ? locations : [locations];
 
-    const primaryTerm = terms[0] || 'Software Engineer';
-    const primaryLoc = locs[0] || '';
-    const extraTerms = terms.slice(1);
-    const extraLocs = locs.slice(1);
-
-    const pythonScript = path.resolve(process.cwd(), 'jobspy_wrapper.py');
-
-    // Build command with all terms/locations encoded as JSON
-    const searchesArg = extraTerms.length > 0
-      ? `--searches '${JSON.stringify(extraTerms)}'`
-      : '';
-    const locationsArg = extraLocs.length > 0
-      ? `--locations '${JSON.stringify(extraLocs)}'`
-      : '';
-
-    // Derive optimal Indeed country code based on primary location (default to worldwide / uk)
-    let countryArg = 'worldwide';
-    const locLower = (primaryLoc || '').toLowerCase();
-    if (locLower.includes('uk') || locLower.includes('united kingdom') || locLower.includes('london')) countryArg = 'uk';
-    else if (locLower.includes('germany') || locLower.includes('berlin') || locLower.includes('munich')) countryArg = 'germany';
-    else if (locLower.includes('netherlands') || locLower.includes('amsterdam')) countryArg = 'netherlands';
-    else if (locLower.includes('canada') || locLower.includes('toronto')) countryArg = 'canada';
-    else if (locLower.includes('nigeria') || locLower.includes('lagos')) countryArg = 'nigeria';
-    else if (locLower.includes('south africa') || locLower.includes('cape town')) countryArg = 'south africa';
-    else if (locLower.includes('singapore')) countryArg = 'singapore';
-    else if (locLower.includes('india') || locLower.includes('bengaluru')) countryArg = 'india';
-    else if (locLower.includes('united states') || locLower.includes('usa')) countryArg = 'usa';
-
-    const command = [
-      `python3 "${pythonScript}"`,
-      `--search "${primaryTerm}"`,
-      primaryLoc ? `--location "${primaryLoc}"` : '',
-      searchesArg,
-      locationsArg,
-      `--sites "indeed,linkedin,zip_recruiter,glassdoor,google"`,
-      `--limit ${limitPerSite}`,
-      `--hours ${hoursOld || 336}`,
-      `--country ${countryArg}`,
-    ].filter(Boolean).join(' ');
+    const pythonBin = options?.pythonBin ?? 'python3';
+    const pythonScript = options?.scriptPath ?? path.resolve(process.cwd(), 'jobspy_wrapper.py');
 
     console.log(`[JobSpy] Launching multi-board scrape (Indeed, LinkedIn, ZipRecruiter, Glassdoor, Google) across ${terms.length} search term(s) and ${locs.length} location(s) (Region: ${countryArg}, Window: 2 weeks)...`);
 
     return new Promise((resolve) => {
-      const child = exec(
-        command,
-        { maxBuffer: 20 * 1024 * 1024, timeout: SCRAPE_TIMEOUT_MS },
+      execFile(
+        pythonBin,
+        [pythonScript, ...args],
+        {
+          encoding: 'utf8',
+          maxBuffer: SCRAPE_MAX_BUFFER_BYTES,
+          timeout: SCRAPE_TIMEOUT_MS,
+          shell: false,
+          env: options?.env ? { ...process.env, ...options.env } : process.env,
+        },
         (error, stdout, stderr) => {
           // Log progress output from the wrapper
           if (stderr) {
@@ -86,7 +132,7 @@ export class JobspyRunner {
           }
 
           if (error) {
-            const isTimeout = error.killed || (error as any).code === 'ETIMEDOUT';
+            const isTimeout = error.killed || (error as NodeJS.ErrnoException).code === 'ETIMEDOUT';
             const msg = isTimeout
               ? `Job board scrape timed out after ${SCRAPE_TIMEOUT_MS / 1000}s — check your network connection.`
               : `Job board scraper failed: ${error.message}`;
@@ -103,8 +149,8 @@ export class JobspyRunner {
 
           try {
             const parsed = JSON.parse(stdout);
-            if (parsed && (parsed as any).error) {
-              const errMsg = `Job board API error: ${(parsed as any).error}`;
+            if (parsed && (parsed as { error?: string }).error) {
+              const errMsg = `Job board API error: ${(parsed as { error: string }).error}`;
               console.warn(`[JobSpy] ${errMsg}`);
               NotificationService.send({
                 type: 'INFO',
@@ -147,7 +193,7 @@ export class JobspyRunner {
                   company: job.company.trim(),
                   location: job.location || primaryLoc || 'Remote',
                   workplaceType: job.workplace_type || 'Full-time',
-                  boardType: (boardType === 'zip_recruiter' ? 'custom' : boardType) as any,
+                  boardType: (boardType === 'zip_recruiter' ? 'custom' : boardType) as JobPosting['boardType'],
                   applyUrl: url,
                   postedAt: job.date_posted ? new Date(job.date_posted).toISOString() : new Date().toISOString(),
                   discoveredAt: new Date().toISOString(),

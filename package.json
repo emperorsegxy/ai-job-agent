@@ -9,7 +9,8 @@
     "build": "next build",
     "start": "next start",
     "harvest": "tsx src/jobs/cron-scheduler.ts",
-    "scheduler": "tsx src/jobs/scheduler.ts"
+    "scheduler": "tsx src/jobs/scheduler.ts",
+    "test": "tsx --test --test-concurrency=1 tests/*.test.ts"
   },
   "dependencies": {
     "@google/genai": "^2.17.1",

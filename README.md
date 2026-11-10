@@ -216,7 +216,6 @@ The same pipelines are exposed through Express (`src/index.ts`) and Next.js App 
 | Method & Path | Description |
 |---------------|-------------|
 | `GET  /api/profile` | Return the candidate profile (404 if none). |
-| `POST /api/profile/parse-local` | Parse a local resume PDF/DOCX path into a structured profile. |
 | `POST /api/profile/upload` | Upload & parse a resume file (multipart) via the Next route. |
 | `POST /api/profile/update` | Save/update the candidate profile. |
 | `GET  /api/jobs` · `DELETE /api/jobs` | List (deduplicated, newest-first) / clear all postings. |

@@ -183,6 +183,40 @@ def scrape_single_site(site, search_term, location, limit, hours_old, country):
         return []
 
 
+# Flags whose next argv element is data, even when that data looks like an option
+# (for example a role of "--help" or a location of "-n").
+_VALUE_OPTIONS = {
+    "--search",
+    "--searches",
+    "--location",
+    "--locations",
+    "--sites",
+    "--limit",
+    "--hours",
+    "--country",
+}
+
+
+def bind_option_values(argv):
+    """Attach each value to its flag before argparse sees it.
+
+    The Node runner passes every role and location as its own argv element and
+    does not use a shell. Argparse would otherwise treat a leading dash as a
+    new option, so "--search" + "--help" is rewritten to "--search=--help".
+    """
+    bound = []
+    index = 0
+    while index < len(argv):
+        arg = argv[index]
+        if arg in _VALUE_OPTIONS and index + 1 < len(argv):
+            bound.append(arg + "=" + argv[index + 1])
+            index += 2
+            continue
+        bound.append(arg)
+        index += 1
+    return bound
+
+
 def main():
     parser = argparse.ArgumentParser(description="Multi-board job scraper using python-jobspy")
     parser.add_argument("--search", type=str, required=True, help="Primary search term")
@@ -193,7 +227,7 @@ def main():
     parser.add_argument("--limit", type=int, default=10, help="Results per site per search")
     parser.add_argument("--hours", type=int, default=336, help="Max hours old (336 hours = 2 weeks)")
     parser.add_argument("--country", type=str, default="worldwide", help="Default country for Indeed")
-    args = parser.parse_args()
+    args = parser.parse_args(bind_option_values(sys.argv[1:]))
 
     # Build full list of search terms and locations
     search_terms = [args.search]
