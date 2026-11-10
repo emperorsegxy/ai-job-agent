@@ -2,7 +2,7 @@ import express from 'express';
 import * as path from 'path';
 import * as fs from 'fs';
 import { dbService } from './config/firebase.js';
-import { ProfileService } from './modules/cv-parser/profile-service.js';
+import { applyProfileUpdate } from './modules/cv-parser/profile-update.js';
 import { PipelineOrchestrator } from './jobs/cron-scheduler.js';
 
 const app = express();
@@ -36,38 +36,14 @@ app.get('/api/profile', async (req, res) => {
   }
 });
 
-// 2. Upload / Parse Local Resume PDF
-app.post('/api/profile/parse-local', async (req, res) => {
-  try {
-    const { localPath } = req.body;
-    if (!localPath || !fs.existsSync(localPath)) {
-      return res.status(400).json({ error: 'Valid local absolute file path to a resume PDF is required.' });
-    }
-
-    const tempDir = path.resolve(process.cwd(), 'storage/temp');
-    if (!fs.existsSync(tempDir)) {
-      fs.mkdirSync(tempDir, { recursive: true });
-    }
-
-    const destFileName = `resume_${Date.now()}.pdf`;
-    const destFilePath = path.join(tempDir, destFileName);
-    fs.copyFileSync(localPath, destFilePath);
-
-    const relativeStoragePath = `resumes/${destFileName}`;
-    const profile = await ProfileService.parseAndSaveProfile(destFilePath, relativeStoragePath);
-    res.json(profile);
-  } catch (err: any) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// 3. Update Profile Data Directly
+// 2. Update Profile Data Directly
 app.post('/api/profile/update', async (req, res) => {
   try {
-    const profileData = req.body;
-    profileData.updatedAt = new Date().toISOString();
-    await dbService.saveProfile(profileData);
-    res.json({ message: 'Profile updated successfully.', profile: profileData });
+    const result = await applyProfileUpdate(req.body, dbService);
+    if (!result.ok) {
+      return res.status(result.status).json({ error: result.error });
+    }
+    res.json({ message: 'Profile updated successfully.', profile: result.profile });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
